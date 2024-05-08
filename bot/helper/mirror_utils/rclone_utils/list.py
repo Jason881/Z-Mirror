@@ -76,7 +76,7 @@ async def path_updates(_, query, obj):
         await deleteMessage(message)
         obj.event.set()
     elif data[1] == 'def':
-        path = f'{obj.remote}{obj.path}' if obj.config_path == 'rcl.conf' else f'mrcc:{obj.remote}{obj.path}'
+        path = f'{obj.remote}{obj.path}' if obj.config_path == 'rclone.conf' else f'mrcc:{obj.remote}{obj.path}'
         if path != obj.user_dict.get('rclone_path'):
             update_user_ldata(obj.user_id, 'rclone_path', path)
             await obj.get_path_buttons()
