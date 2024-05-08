@@ -1,38 +1,34 @@
 #!/usr/bin/env python3
-from asyncio import Event, wait_for, wrap_future
+from asyncio import wait_for, Event, wrap_future
+from aiofiles.os import path as aiopath
+from aiofiles import open as aiopen
 from configparser import ConfigParser
+from pyrogram.handlers import CallbackQueryHandler
+from pyrogram.filters import regex, user
 from functools import partial
 from json import loads
 from time import time
 
-from aiofiles import open as aiopen
-from aiofiles.os import path as aiopath
-from pyrogram.filters import regex, user
-from pyrogram.handlers import CallbackQueryHandler
-
-from bot import LOGGER, config_dict, user_data
-from bot.helper.ext_utils.bot_utils import (cmd_exec, get_readable_file_size,
-                                            get_readable_time, new_task,
-                                            new_thread, update_user_ldata)
-from bot.helper.ext_utils.db_handler import DbManager
+from bot import LOGGER, config_dict
+from bot.helper.ext_utils.db_handler import DbManger
 from bot.helper.telegram_helper.button_build import ButtonMaker
-from bot.helper.telegram_helper.message_utils import editMessage, sendMessage, deleteMessage, auto_delete_message
+from bot.helper.telegram_helper.message_utils import sendMessage, editMessage, deleteMessage
+from bot.helper.ext_utils.bot_utils import cmd_exec, new_thread, get_readable_file_size, new_task, get_readable_time
 
 LIST_LIMIT = 6
 
 
 @new_task
-async def path_updates(_, query, obj):
+async def path_updates(client, query, obj):
     await query.answer()
     message = query.message
-    reply_to = message.reply_to_message
     data = query.data.split()
     if data[1] == 'cancel':
         obj.remote = 'Task has been cancelled!'
         obj.path = ''
         obj.is_cancelled = True
         obj.event.set()
-        await deleteMessage(reply_to)
+        await deleteMessage(message)
         return
     if obj.query_proc:
         return
@@ -77,11 +73,11 @@ async def path_updates(_, query, obj):
         obj.event.set()
     elif data[1] == 'def':
         path = f'{obj.remote}{obj.path}' if obj.config_path == 'rclone.conf' else f'mrcc:{obj.remote}{obj.path}'
-        if path != obj.user_dict.get('rclone_path'):
-            update_user_ldata(obj.user_id, 'rclone_path', path)
+        if path != config_dict['RCLONE_PATH']:
+            config_dict['RCLONE_PATH'] = path
             await obj.get_path_buttons()
             if config_dict['DATABASE_URL']:
-                await DbManager().update_user_data(obj.user_id)
+                await DbManger().update_config({'RCLONE_PATH': path})
     elif data[1] == 'owner':
         obj.config_path = 'rclone.conf'
         obj.path = ''
@@ -97,6 +93,7 @@ async def path_updates(_, query, obj):
 
 class RcloneList:
     def __init__(self, client, message):
+        self.__user_id = message.from_user.id
         self.__rc_user = False
         self.__rc_owner = False
         self.__client = client
@@ -105,14 +102,12 @@ class RcloneList:
         self.__reply_to = None
         self.__time = time()
         self.__timeout = 240
-        self.user_id = message.from_user.id
-        self.user_dict = user_data.get(self.user_id, {})
         self.remote = ''
         self.is_cancelled = False
         self.query_proc = False
         self.item_type = '--dirs-only'
         self.event = Event()
-        self.user_rcc_path = f'rclone/{self.user_id}.conf'
+        self.user_rcc_path = f'rclone/{self.__user_id}.conf'
         self.config_path = ''
         self.path = ''
         self.list_status = ''
@@ -124,16 +119,14 @@ class RcloneList:
     async def __event_handler(self):
         pfunc = partial(path_updates, obj=self)
         handler = self.__client.add_handler(CallbackQueryHandler(
-            pfunc, filters=regex('^rcq') & user(self.user_id)), group=-1)
+            pfunc, filters=regex('^rcq') & user(self.__user_id)), group=-1)
         try:
             await wait_for(self.event.wait(), timeout=self.__timeout)
         except:
             self.path = ''
             self.remote = 'Timed Out. Task has been cancelled!'
-            LOGGER.info(f'User {self.user_id} timed out while choosing rclone path')
             self.is_cancelled = True
             self.event.set()
-            await deleteMessage(self.__message)
         finally:
             self.__client.remove_handler(*handler)
 
@@ -169,13 +162,17 @@ class RcloneList:
             buttons.ibutton('Next', 'rcq nex', position='footer')
         if self.list_status == 'rcd':
             if self.item_type == '--dirs-only':
-                buttons.ibutton('Files', 'rcq itype --files-only', position='footer')
+                buttons.ibutton(
+                    'Files', 'rcq itype --files-only', position='footer')
             else:
-                buttons.ibutton('Folders', 'rcq itype --dirs-only', position='footer')
+                buttons.ibutton(
+                    'Folders', 'rcq itype --dirs-only', position='footer')
         if self.list_status == 'rcu' or len(self.path_list) > 0:
-            buttons.ibutton('Choose Current Path', 'rcq cur', position='footer')
+            buttons.ibutton('Choose Current Path',
+                            'rcq cur', position='footer')
         if self.list_status == 'rcu':
-            buttons.ibutton('Set as Default Path', 'rcq def', position='footer')
+            buttons.ibutton('Set as Default Path',
+                            'rcq def', position='footer')
         if self.path or len(self.__sections) > 1 or self.__rc_user and self.__rc_owner:
             buttons.ibutton('Back', 'rcq back pa', position='footer')
         if self.path:
